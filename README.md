@@ -149,7 +149,10 @@ MacSignal adds its hooks to these files:
 | iCode | `~/.chrys/hooks/hooks.yaml` |
 
 Before the first change, the original file is backed up as `<file>.bak-macsignal`. Unticking an
-agent removes only the hooks MacSignal added.
+agent removes only the hooks MacSignal added and clears that agent's sessions immediately.
+If MacSignal cannot read the configuration or recognize the hooks format, it reports the error
+and leaves the file untouched. If Codex defines `features` in another form, set `hooks = true`
+under a `[features]` table in `config.toml` before setting up MacSignal's hooks.
 
 Each hook runs `MacSignal hook <state> <agent>`, which sends the session state to the running
 MacSignal over `~/.macsignal.sock`. When MacSignal is not running the hook does nothing, so the
@@ -160,7 +163,8 @@ agent never sees an error.
 Click the menu bar item to see the sessions. Each row starts with the agent's icon. Sessions that
 need attention (waiting for you, working, finished and unread) are always listed; read ones fill
 the list up to five rows, and sessions quiet for more than 30 minutes go under **N earlier
-sessions**. Click a row to open the session and mark it read, or use **Mark All as Read**.
+sessions**. Click a row to open the session (in the Claude or Codex app, or the app it runs in)
+and mark it read, or use **Mark All as Read**.
 
 ## AI usage
 
@@ -170,7 +174,7 @@ with Codex). The cell shows the window you have used the most of; the menu lists
 with its reset time. When every window has passed its reset time the cell shows `—` until the
 next use.
 
-- **Codex**: read from Codex's own session logs whenever a Codex hook runs, so it needs the hooks
+- **Codex**: read from Codex's own session logs at the end of each turn, so it needs the hooks
   approved (see [Connecting agents](#connecting-agents)).
 - **Claude Code**: read every 5 minutes from the same service Claude Code's `/usage` command
   uses. MacSignal reads Claude Code's login from the keychain item `Claude Code-credentials` with
@@ -180,10 +184,10 @@ next use.
   - If you only use the Claude desktop app, that login expires after a few hours. MacSignal then
     asks Claude Code to renew it itself: first with `claude mcp list`, which uses no quota, and
     if that does not help, with a one-word request to the smallest model (about 650 tokens, at
-    most once every 8 hours). Both run with your system proxy.
+    most once every 8 hours, even across MacSignal restarts). Both run with your system proxy.
   - MacSignal also adds a silent `statusLine` command to `~/.claude/settings.json` so usage
-    updates while you work in the terminal. If you already have your own status line it is left
-    alone, and Settings shows *Claude Code has its own status line, not counted*.
+    updates while you work in the terminal. If you already have your own status line, MacSignal
+    leaves it in place and continues reading usage every 5 minutes.
 
 ## Settings
 

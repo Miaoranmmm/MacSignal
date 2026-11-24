@@ -101,8 +101,10 @@ final class AgentMenuContent: NSObject {
         item.state = .on
         item.onStateImage = Self.dot(entry.counts ? entry.state : nil)
         item.image = AgentIcons.image(for: entry.agent)
-        // macOS 27 hides menu item images unless asked to show them.
-        if #available(macOS 27, *) { item.preferredImageVisibility = .visible }
+        // NSMenuItemImageVisibilityVisible = 1. Look up the setter at runtime for older SDKs.
+        if item.responds(to: NSSelectorFromString("setPreferredImageVisibility:")) {
+            item.setValue(1, forKey: "preferredImageVisibility")
+        }
         item.toolTip = entry.title.isEmpty ? agent : "\(agent)\n\(entry.title)"
         item.attributedTitle = Self.title(
             left: [project, String(task)].filter { !$0.isEmpty }.joined(separator: " · "),
@@ -191,20 +193,44 @@ final class AgentMenuContent: NSObject {
 
     // MARK: Actions
 
-    /// Marks the session read, then opens it: desktop sessions directly in the Claude or Codex app,
-    /// terminal sessions by bringing their app forward.
+    /// Opens the session, falling back to the app that reported it.
     @objc func openSession(_ sender: NSMenuItem) {
+        let workspace = NSWorkspace.shared
+        openSession(sender, applicationForURL: workspace.urlForApplication(toOpen:),
+                    applicationForBundle: workspace.urlForApplication(withBundleIdentifier:)) { url, completion in
+            let configuration = NSWorkspace.OpenConfiguration()
+            let finished: (NSRunningApplication?, Error?) -> Void = { app, error in
+                let opened = app != nil && error == nil
+                DispatchQueue.main.async { completion(opened) }
+            }
+            if url.isFileURL {
+                workspace.openApplication(at: url, configuration: configuration, completionHandler: finished)
+            } else {
+                workspace.open(url, configuration: configuration, completionHandler: finished)
+            }
+        }
+    }
+
+    func openSession(_ sender: NSMenuItem, applicationForURL: (URL) -> URL?,
+                     applicationForBundle: (String) -> URL?,
+                     open: (URL, @escaping (Bool) -> Void) -> Void) {
         guard let id = sender.representedObject as? String, let e = receiver.sessions.entries[id] else { return }
-        receiver.sessions.markSeen(id)
-        receiver.applySessions()
-        if e.host.range(of: "^local_[A-Za-z0-9-]{1,64}$", options: .regularExpression) != nil,
-           let url = URL(string: "claude://code/continue?session=\(e.host)") {
-            NSWorkspace.shared.open(url)
-        } else if e.agent == "codex", id.range(of: "^[A-Za-z0-9-]{1,64}$", options: .regularExpression) != nil,
-                  let url = URL(string: "codex://threads/\(id)") {
-            NSWorkspace.shared.open(url)
-        } else if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: e.app) {
-            NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
+        let markOpened: (Bool) -> Void = { [weak receiver] opened in
+            guard opened, let receiver, let current = receiver.sessions.entries[id],
+                  current.since == e.since, current.agent == e.agent else { return }
+            receiver.sessions.markSeen(id)
+            receiver.applySessions()
+        }
+        var url: URL?
+        if e.host.range(of: "^local_[A-Za-z0-9-]{1,64}$", options: .regularExpression) != nil {
+            url = URL(string: "claude://code/continue?session=\(e.host)")
+        } else if e.agent == "codex", id.range(of: "^[A-Za-z0-9-]{1,64}$", options: .regularExpression) != nil {
+            url = URL(string: "codex://threads/\(id)")
+        }
+        if let url, applicationForURL(url) != nil {
+            open(url, markOpened)
+        } else if !e.app.isEmpty, let appURL = applicationForBundle(e.app) {
+            open(appURL, markOpened)
         }
     }
 

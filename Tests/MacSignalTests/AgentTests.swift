@@ -20,6 +20,11 @@ final class AgentTests: XCTestCase {
     private func temporaryHome() throws -> String {
         let dir = NSTemporaryDirectory() + "macsignal-agent-\(UUID().uuidString)"
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let originalHome = Integration.home
+        addTeardownBlock {
+            Integration.home = originalHome
+            try FileManager.default.removeItem(atPath: dir)
+        }
         Integration.home = dir
         return dir
     }
@@ -52,6 +57,35 @@ final class AgentTests: XCTestCase {
         report(sessions, "a", "working")
         report(sessions, "a", "waiting")
         XCTAssertEqual(sessions.waitingIDs, ["a"])
+    }
+
+    func testOldUnreadWaitsStayOnlyWhileTheirProcessRuns() throws {
+        let sessions = AgentSessions()
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let start = try XCTUnwrap(processInfo(pid)).start
+        report(sessions, "waiting", "waiting")
+        report(sessions, "read-waiting", "waiting")
+        report(sessions, "working", "working")
+        report(sessions, "no-pid", "waiting")
+        report(sessions, "reused-pid", "waiting")
+        report(sessions, "old-done", "done")
+        report(sessions, "unread-done", "done")
+        sessions.markSeen("read-waiting")
+        for id in ["waiting", "read-waiting", "working", "no-pid", "reused-pid"] {
+            sessions.entries[id]?.updated = Date().addingTimeInterval(-3601)
+        }
+        for id in ["waiting", "read-waiting", "working", "reused-pid", "old-done", "unread-done"] {
+            sessions.entries[id]?.pid = pid
+            sessions.entries[id]?.start = start
+        }
+        sessions.entries["reused-pid"]?.start = start - 1
+        sessions.entries["unread-done"]?.start = start - 1
+        sessions.entries["old-done"]?.updated = Date().addingTimeInterval(-12 * 3600 - 1)
+        sessions.prune()
+        // An interrupted turn reports nothing more, so a quiet working session still expires.
+        XCTAssertEqual(Set(sessions.entries.keys), ["waiting", "unread-done"])
+        XCTAssertEqual(sessions.waitingIDs, ["waiting"])
+        XCTAssertEqual(sessions.counts, [1, 0, 1])
     }
 
     // MARK: Hooks
@@ -89,15 +123,15 @@ final class AgentTests: XCTestCase {
         try claude.install()
         XCTAssertTrue(claude.current)
         XCTAssertEqual(claude.ourCommands.count, claude.events.count)
-        XCTAssertFalse(claude.text.contains("Downloads/MacSignal"))
-        XCTAssertTrue(claude.text.contains("afplay done.aiff"))
-        XCTAssertTrue(claude.text.contains("\"model\""))
+        XCTAssertFalse(try claude.text.contains("Downloads/MacSignal"))
+        XCTAssertTrue(try claude.text.contains("afplay done.aiff"))
+        XCTAssertTrue(try claude.text.contains("\"model\""))
         // Installing again (re-checking the agent) does not add a second set.
         try claude.install()
         XCTAssertEqual(claude.ourCommands.count, claude.events.count)
         try claude.uninstall()
         XCTAssertFalse(claude.installed)
-        XCTAssertTrue(claude.text.contains("afplay done.aiff"))
+        XCTAssertTrue(try claude.text.contains("afplay done.aiff"))
     }
 
     func testICodeBlockKeepsTheMarkerLinesVerbatim() throws {
@@ -106,7 +140,7 @@ final class AgentTests: XCTestCase {
         try FileManager.default.createDirectory(atPath: home + "/.chrys/hooks", withIntermediateDirectories: true)
         try "hooks: []\n".write(toFile: icode.hooksFile, atomically: true, encoding: .utf8)
         try icode.install()
-        let lines = icode.text.components(separatedBy: "\n")
+        let lines = try icode.text.components(separatedBy: "\n")
         // Scripts that rewrite hooks.yaml keep the hooks between exactly these two lines.
         XCTAssertTrue(lines.contains("# >>> MacSignal hooks (managed by MacSignal)"))
         XCTAssertTrue(lines.contains("# <<< MacSignal hooks"))
@@ -115,7 +149,113 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(icode.ourCommands.count, icode.events.count)
         try icode.uninstall()
         XCTAssertFalse(icode.installed)
-        XCTAssertEqual(icode.text, "hooks: []\n")
+        XCTAssertEqual(try icode.text, "hooks: []\n")
+    }
+
+    func testICodeSpacedEmptyListIsAccepted() throws {
+        let home = try temporaryHome()
+        let icode = try XCTUnwrap(Integration.all.first { $0.id == "icode" })
+        try FileManager.default.createDirectory(atPath: home + "/.chrys/hooks", withIntermediateDirectories: true)
+        try "hooks: [ ]\n".write(toFile: icode.hooksFile, atomically: true, encoding: .utf8)
+        try icode.install()
+        XCTAssertTrue(icode.installed)
+        try icode.uninstall()
+        XCTAssertEqual(try icode.text, "hooks: []\n")
+    }
+
+    func testCodexRejectsUnreadableAndUnsupportedFeaturesWithoutChangingEitherFile() throws {
+        _ = try temporaryHome()
+        let codex = try XCTUnwrap(Integration.all.first { $0.id == "codex" })
+        let config = URL(fileURLWithPath: codex.configDir + "/config.toml")
+        let hooks = URL(fileURLWithPath: codex.hooksFile)
+        let originalHooks = Data(#"{"hooks":{}}"#.utf8)
+        try FileManager.default.createDirectory(atPath: codex.configDir, withIntermediateDirectories: true)
+        try originalHooks.write(to: hooks)
+
+        let originalConfig = Data("[features]\nhooks = false\n".utf8)
+        try originalConfig.write(to: config)
+        try Data("{".utf8).write(to: hooks)
+        XCTAssertThrowsError(try codex.install())
+        XCTAssertEqual(try Data(contentsOf: config), originalConfig)
+        try originalHooks.write(to: hooks)
+        try FileManager.default.removeItem(at: config)
+
+        try FileManager.default.createDirectory(at: config, withIntermediateDirectories: false)
+        XCTAssertThrowsError(try codex.install()) { XCTAssertTrue($0 is IntegrationError) }
+        XCTAssertEqual(try Data(contentsOf: hooks), originalHooks)
+        try FileManager.default.removeItem(at: config)
+
+        let unsupported = [
+            "features.hooks = true\n",
+            "features = { hooks = true }\n",
+            "[features.other]\nx = true\n",
+            "[ \"features\" ]\nhooks = true\n",
+            "[[features.other]]\nx = true\n",
+        ]
+        for (index, contents) in ([Data([0xff])] + unsupported.map { Data($0.utf8) }).enumerated() {
+            try contents.write(to: config)
+            XCTAssertThrowsError(try codex.install()) { error in
+                XCTAssertTrue(error is IntegrationError)
+                if index > 0 { XCTAssertTrue(error.localizedDescription.contains("features.hooks")) }
+            }
+            XCTAssertEqual(try Data(contentsOf: config), contents)
+            XCTAssertEqual(try Data(contentsOf: hooks), originalHooks)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: config.path + ".bak-macsignal"))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: hooks.path + ".bak-macsignal"))
+        }
+    }
+
+    func testCodexQuotedHooksKeyIsUpdatedNotDuplicated() throws {
+        _ = try temporaryHome()
+        let codex = try XCTUnwrap(Integration.all.first { $0.id == "codex" })
+        let config = codex.configDir + "/config.toml"
+        try FileManager.default.createDirectory(atPath: codex.configDir, withIntermediateDirectories: true)
+        try "[features]\n\"hooks\" = false # mine\n".write(toFile: config, atomically: true, encoding: .utf8)
+        try codex.install()
+        XCTAssertEqual(try String(contentsOfFile: config, encoding: .utf8), "[features]\nhooks = true # mine\n")
+    }
+
+    func testUnreadableHookFilesAndStatusLineSettingsAreNotReplaced() throws {
+        _ = try temporaryHome()
+        for id in ["claude", "icode"] {
+            let agent = try XCTUnwrap(Integration.all.first { $0.id == id })
+            let path = URL(fileURLWithPath: agent.hooksFile)
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            let sentinel = path.appendingPathComponent("user-config")
+            let contents = Data("keep me".utf8)
+            try contents.write(to: sentinel)
+            XCTAssertThrowsError(try agent.install()) { XCTAssertTrue($0 is IntegrationError) }
+            XCTAssertThrowsError(try agent.uninstall()) { XCTAssertTrue($0 is IntegrationError) }
+            if id == "claude" {
+                XCTAssertThrowsError(try agent.setStatusLine(true)) { XCTAssertTrue($0 is IntegrationError) }
+                XCTAssertThrowsError(try agent.setStatusLine(false)) { XCTAssertTrue($0 is IntegrationError) }
+            }
+            XCTAssertEqual(try Data(contentsOf: sentinel), contents)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path.path + ".bak-macsignal"))
+        }
+    }
+
+    func testICodeRejectsUnrecognizedTopLevelHooksWithoutWriting() throws {
+        _ = try temporaryHome()
+        let icode = try XCTUnwrap(Integration.all.first { $0.id == "icode" })
+        let path = URL(fileURLWithPath: icode.hooksFile)
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for config in [
+            "hooks: [{id: mine, event: after_turn}]\n",
+            "hooks: null\n",
+            "hooks:\n  [{id: mine, event: after_turn}]\n",
+            "\"hooks\": [{id: mine}]\n",
+            "hooks:\n  before_turn: mine\n",
+            "hooks:\n- id: a\nhooks: []\n",
+            "{\"hooks\": []}\n",
+            "hooks :\n",
+        ] {
+            let data = Data(config.utf8)
+            try data.write(to: path)
+            XCTAssertThrowsError(try icode.install()) { XCTAssertTrue($0 is IntegrationError) }
+            XCTAssertEqual(try Data(contentsOf: path), data)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: path.path + ".bak-macsignal"))
+        }
     }
 
     // MARK: Menu
@@ -168,13 +308,65 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(byID.count, 4)
         for row in rows {
             XCTAssertEqual(row.image?.size, NSSize(width: 16, height: 16))
-            if #available(macOS 27, *) { XCTAssertEqual(row.preferredImageVisibility, .visible) }
+            if #available(macOS 27, *) {
+                guard row.responds(to: NSSelectorFromString("preferredImageVisibility")) else {
+                    return XCTFail("macOS 27 session row is missing its image visibility property")
+                }
+                XCTAssertEqual((row.value(forKey: "preferredImageVisibility") as? NSNumber)?.intValue, 1)
+            }
         }
         // One icon per agent: sessions of the same agent look the same, different agents differ.
         XCTAssertTrue(byID["i"]!.image === byID["i2"]!.image)
         XCTAssertFalse(byID["i"]!.image === byID["c"]!.image)
         XCTAssertFalse(byID["c"]!.image === byID["x"]!.image)
         XCTAssertEqual(byID["x"]!.image?.accessibilityDescription, "Codex")
+    }
+
+    func testSessionClickFallsBackAndMarksReadOnlyAfterSuccessfulOpen() throws {
+        let terminal = URL(fileURLWithPath: "/Terminal.app")
+        for (agent, host, link) in [
+            ("codex", "", "codex://threads/session"),
+            ("claude", "local_example", "claude://code/continue?session=local_example"),
+        ] {
+            let receiver = AgentReceiver()
+            report(receiver.sessions, "session", "waiting", agent: agent)
+            receiver.sessions.entries["session"]?.host = host
+            receiver.sessions.entries["session"]?.app = "com.apple.Terminal"
+            let content = AgentMenuContent(receiver: receiver)
+            let row = try XCTUnwrap(content.items(now: Date()).first { $0.representedObject as? String == "session" })
+            var opened: URL?
+            var finish: ((Bool) -> Void)?
+            func click(handler: URL?, fallback: URL?) {
+                opened = nil
+                finish = nil
+                content.openSession(row, applicationForURL: {
+                    XCTAssertEqual($0.absoluteString, link)
+                    return handler
+                }, applicationForBundle: {
+                    XCTAssertEqual($0, "com.apple.Terminal")
+                    return fallback
+                }) {
+                    opened = $0
+                    finish = $1
+                }
+            }
+            click(handler: nil, fallback: nil)
+            XCTAssertNil(opened)
+            XCTAssertEqual(receiver.sessions.waitingIDs, ["session"])
+            click(handler: nil, fallback: terminal)
+            XCTAssertEqual(opened, terminal)
+            try XCTUnwrap(finish)(false)
+            XCTAssertEqual(receiver.sessions.waitingIDs, ["session"])
+            click(handler: terminal, fallback: nil)
+            XCTAssertEqual(opened?.absoluteString, link)
+            try XCTUnwrap(finish)(false)
+            XCTAssertEqual(receiver.sessions.waitingIDs, ["session"])
+            click(handler: nil, fallback: terminal)
+            XCTAssertEqual(opened, terminal)
+            XCTAssertEqual(receiver.sessions.waitingIDs, ["session"])
+            try XCTUnwrap(finish)(true)
+            XCTAssertTrue(receiver.sessions.waitingIDs.isEmpty)
+        }
     }
 
     func testICodeIconIsTheWhiteMarkOnPurple() throws {
@@ -226,9 +418,58 @@ final class AgentTests: XCTestCase {
         XCTAssertTrue(menu.items.contains { $0.title == "打开日志" })
     }
 
+    func testDisconnectingOneAgentClearsItsSessionsAndIgnoresLaterReports() throws {
+        _ = try temporaryHome()
+        let claude = try XCTUnwrap(Integration.all.first { $0.id == "claude" })
+        let codex = try XCTUnwrap(Integration.all.first { $0.id == "codex" })
+        try claude.install()
+        try codex.install()
+        let delegate = AppDelegate()
+        delegate.hookedAgents = ["claude", "codex"]
+        let receiver = delegate.receiver
+        agentLogPath = NSTemporaryDirectory() + "macsignal-tests.log"
+        receiver.handle(#"J:{"state":"waiting","session":"claude-session","agent":"claude"}"#)
+        receiver.handle(#"J:{"state":"working","session":"codex-session","agent":"codex"}"#)
+        XCTAssertEqual(receiver.sessions.counts, [1, 1, 0])
+        try claude.uninstall()
+        delegate.refreshAgents()
+        XCTAssertEqual(delegate.hookedAgents, ["codex"])
+        XCTAssertEqual(Set(receiver.sessions.entries.keys), ["codex-session"])
+        var changes = 0
+        receiver.onSessionsChange = { changes += 1 }
+        receiver.handle(#"J:{"state":"waiting","session":"late","agent":"claude"}"#)
+        XCTAssertEqual(changes, 0)
+        XCTAssertEqual(receiver.sessions.counts, [0, 1, 0])
+    }
+
+    func testClaudeQuotaIsAvailableWithAUserStatusLine() throws {
+        _ = try temporaryHome()
+        let claude = try XCTUnwrap(Integration.all.first { $0.id == "claude" })
+        try FileManager.default.createDirectory(atPath: claude.configDir, withIntermediateDirectories: true)
+        let settings = URL(fileURLWithPath: claude.hooksFile)
+        try Data(#"{"statusLine":{"type":"command","command":"~/bin/my-status.sh"}}"#.utf8).write(to: settings)
+        try claude.install()
+        let original = try Data(contentsOf: settings)
+        let defaults = UserDefaults.standard
+        let key = StatusModule.quota.defaultsKey
+        let previous = defaults.object(forKey: key)
+        defer { defaults.set(previous, forKey: key) }
+        StatusModule.quota.setChecked(true)
+        let delegate = AppDelegate()
+        delegate.hookedAgents = ["claude"]
+        delegate.refreshAgents()
+        let menu = delegate.settingsMenu()
+        let quota = try XCTUnwrap(menu.items.first { $0.title == StatusModule.quota.title })
+        XCTAssertTrue(quota.isEnabled)
+        XCTAssertEqual(quota.state, .on)
+        XCTAssertFalse(menu.items.contains { $0.title.contains("未统计") })
+        XCTAssertEqual(try Data(contentsOf: settings), original)
+    }
+
     /// A report on the socket reaches the sessions; one it does not know is ignored.
     func testReceiverAppliesSessionReportsAndQuotas() {
         let receiver = AgentReceiver()
+        receiver.hookedAgents = ["claude"]
         var changes = 0, quotas: [String] = []
         receiver.onSessionsChange = { changes += 1 }
         receiver.onQuota = { quotas.append($0) }

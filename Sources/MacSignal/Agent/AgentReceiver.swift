@@ -28,6 +28,9 @@ func makeSockaddr() -> sockaddr_un {
 /// Receives the hooks' reports on ~/.macsignal.sock while at least one agent is hooked up.
 final class AgentReceiver {
     let sessions = AgentSessions()
+    var hookedAgents: Set<String> = [] {
+        didSet { sessions.entries = sessions.entries.filter { hookedAgents.contains($0.value.agent) } }
+    }
     /// Called when the sessions change.
     var onSessionsChange: (() -> Void)?
     /// A "Q:" message's JSON (see AgentQuota).
@@ -91,8 +94,7 @@ final class AgentReceiver {
     func handle(_ cmd: String) {
         if cmd.hasPrefix("Q:") {
             onQuota?(String(cmd.dropFirst(2)))
-        } else if cmd.hasPrefix("J:") {
-            sessions.apply(cmd)
+        } else if sessions.apply(cmd, hookedAgents: hookedAgents) {
             applySessions()
         }
     }

@@ -126,9 +126,8 @@ func runStatusLine() -> Never {
     exit(0)
 }
 
-/// The quota in the latest `token_count` event of a Codex session log. It runs with every hook, so it
-/// reads back at most 4 MB (about 80 ms): every model response logs one, so the latest is near the
-/// end; a log without any (an API key has no quota) is not read through each time.
+/// The quota in the latest `token_count` event of a Codex session log. Every model response
+/// logs one, so read back at most 4 MB from the end.
 func codexQuota(transcript path: String) -> AgentQuota? {
     var found: AgentQuota?
     _ = lastLine(of: path, megabytes: 4) { line in

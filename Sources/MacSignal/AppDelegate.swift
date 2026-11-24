@@ -24,16 +24,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var showNumbers = UserDefaults.standard.bool(forKey: "showNumbers")
 
     // Agents.
-    private let receiver = AgentReceiver()
+    let receiver = AgentReceiver()
     private lazy var agentMenu = AgentMenuContent(receiver: receiver)
     private let quota = UsageLimits()
     private let claudeUsage = ClaudeUsage()
     /// Agents with our hooks; any: the lamps and 「Agent 会话」 are shown.
     /// Set by refreshAgents (internal so tests can build the menu for either case).
-    var hookedAgents: Set<String> = []
+    var hookedAgents: Set<String> {
+        get { receiver.hookedAgents }
+        set { receiver.hookedAgents = newValue }
+    }
     var agentsHooked: Bool { !hookedAgents.isEmpty }
-    /// Claude Code is hooked up but runs the user's own statusLine: its quota is not known.
-    private var claudeStatusLineTheirs = false
     private var menuOpen = false
     /// Waiting sessions already announced; a new one blinks the red lamp.
     private var knownWaiting: Set<String> = []
@@ -168,24 +169,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         settings.addItem(ProcessMenuContent.heading(L("Display", "显示")))
         // What the menu bar item shows; a module whose condition is not met is not offered.
-        // AI 额度 with only Claude Code, which runs the user's own statusLine: shown grayed, with why.
         let now = readings
-        for module in StatusModule.allCases {
-            let available = module.isAvailable(now)
-            let claudeOwnStatusLine = module == .quota && claudeStatusLineTheirs
-            guard available || claudeOwnStatusLine else { continue }
+        for module in StatusModule.allCases where module.isAvailable(now) {
             let item = NSMenuItem(title: module.title, action: #selector(toggleModule(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = module.rawValue
             item.state = module.isChecked ? .on : .off
-            item.isEnabled = available
             settings.addItem(keepOpen(item))
-            if claudeOwnStatusLine {
-                let note = NSMenuItem(title: L("Claude Code has its own status line, not counted", "Claude Code 已有自定义状态栏，未统计"),
-                                      action: nil, keyEquivalent: "")
-                note.isEnabled = false
-                settings.addItem(note)
-            }
         }
         settings.addItem(.separator())
         let numbers = NSMenuItem(title: L("Show Numbers", "显示数字"), action: #selector(toggleNumbers), keyEquivalent: "")
@@ -261,21 +251,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Shows or hides everything agent-related, and starts or stops the socket with it.
-    private func refreshAgents() {
+    func refreshAgents() {
         let agents = Set(Integration.all.filter(\.installed).map(\.id))
         refreshStatusLine(claudeHooked: agents.contains("claude"))
         guard agents != hookedAgents else { return }
         let wasHooked = agentsHooked
         hookedAgents = agents
-        updateStatus()
-        guard agentsHooked != wasHooked else { return }
-        let hooked = agentsHooked
-        receiver.setActive(hooked)
-        updateStatus()
+        if agentsHooked != wasHooked {
+            receiver.setActive(agentsHooked)
+        } else {
+            sessionsChanged()
+        }
     }
 
-    /// Claude Code passes its quota only to a statusLine command: ours is in while 「AI 额度」 is
-    /// checked and Claude Code is hooked up, and never replaces the user's own.
+    /// Our statusLine reports quota from the terminal while 「AI 额度」 is checked and Claude Code
+    /// is hooked up, and never replaces the user's own.
     private func refreshStatusLine(claudeHooked: Bool) {
         guard let claude = Integration.all.first(where: { $0.id == "claude" }) else { return }
         do {
@@ -283,7 +273,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             agentLog("updating the Claude Code statusLine failed: \(error.localizedDescription)")
         }
-        claudeStatusLineTheirs = claudeHooked && claude.statusLine == .theirs
     }
 
     /// Reads Claude Code's quota while its cell can show: at launch, every 5 minutes, after waking
@@ -382,7 +371,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// What the menu bar modules read now.
     private var readings: Readings {
         var r = Readings(snapshot: snapshot)
-        r.quotaAgents = ["codex", "claude"].filter { hookedAgents.contains($0) && !($0 == "claude" && claudeStatusLineTheirs) }
+        r.quotaAgents = ["codex", "claude"].filter { hookedAgents.contains($0) }
         r.quota = quota.byAgent
         r.lamps = agentsHooked ? receiver.sessions.counts.map { $0 > 0 } : nil
         r.redDimmed = redDimmed

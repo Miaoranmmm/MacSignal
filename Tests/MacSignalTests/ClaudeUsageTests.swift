@@ -45,6 +45,37 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertEqual(login(#"{"accessToken": "tok"}"#), .token("tok"))
     }
 
+    func testModelRenewalAttemptsAreEightHoursApartEvenAfterFailureOrRelaunch() throws {
+        let suite = "macsignal-claude-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let oldLogPath = agentLogPath
+        let logPath = NSTemporaryDirectory() + suite + ".log"
+        agentLogPath = logPath
+        defer {
+            defaults.removePersistentDomain(forName: suite)
+            agentLogPath = oldLogPath
+            try? FileManager.default.removeItem(atPath: logPath)
+        }
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        func renew(after seconds: TimeInterval, logins: [ClaudeUsage.Login],
+                   succeeds: Bool, commands: [String], file: StaticString = #filePath, line: UInt = #line) throws {
+            // Use a fresh defaults instance as a new app launch would.
+            let preferences = try XCTUnwrap(UserDefaults(suiteName: suite))
+            var replies = logins.makeIterator()
+            var invoked: [String] = []
+            let renewed = ClaudeUsage.renewLogin(defaults: preferences, now: { start.addingTimeInterval(seconds) },
+                run: { invoked.append($0.first == "-p" ? "-p" : $0.joined(separator: " ")) },
+                readLogin: { replies.next() ?? .expired })
+            XCTAssertEqual(invoked, commands, file: file, line: line)
+            XCTAssertEqual(renewed, succeeds, file: file, line: line)
+        }
+        try renew(after: 0, logins: [.none("no login"), .none("no login")], succeeds: false, commands: ["mcp list", "-p"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: logPath))
+        try renew(after: 8 * 3600 - 1, logins: [.expired], succeeds: false, commands: ["mcp list"])
+        try renew(after: 8 * 3600 - 1, logins: [.token("renewed")], succeeds: true, commands: ["mcp list"])
+        try renew(after: 8 * 3600, logins: [.expired, .token("renewed")], succeeds: true, commands: ["mcp list", "-p"])
+    }
+
     func testClaudeCodeIsGivenTheSystemProxy() {
         let system: [String: Any] = ["HTTPSEnable": 1, "HTTPSProxy": "127.0.0.1", "HTTPSPort": 7897,
                                      "ExceptionsList": ["localhost", "*.local"]]

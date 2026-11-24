@@ -118,22 +118,22 @@ MacSignal 修改这些文件来添加 hook：
 | Codex | `~/.codex/hooks.json`，以及 `~/.codex/config.toml` 里的 `[features] hooks = true` |
 | iCode | `~/.chrys/hooks/hooks.yaml` |
 
-第一次修改前，原文件备份为 `<文件名>.bak-macsignal`。取消勾选只移除 MacSignal 自己加的 hook。
+第一次修改前，原文件备份为 `<文件名>.bak-macsignal`。取消勾选只移除 MacSignal 自己加的 hook，并立即清掉该 agent 的会话。配置无法读取或 hook 写法无法识别时，MacSignal 会提示错误并保留原文件。Codex 用其他写法定义 `features` 时，请在 `config.toml` 的 `[features]` 表中设置 `hooks = true`，再接入 MacSignal 的 hook。
 
 每个 hook 运行 `MacSignal hook <状态> <agent>`，通过 `~/.macsignal.sock` 把会话状态发给正在运行的 MacSignal。MacSignal 没在运行时 hook 什么也不做，agent 不会报错。
 
 ### 会话列表
 
-点开菜单栏项就能看到会话。每行前面是 agent 的图标。需要关注的会话（等你确认、工作中、完成未读）总是列出；已读的只在总行数不到 5 行时补上，安静超过 30 分钟的放进「更早的 N 个会话」。点一行打开那个会话并标为已读，或者用「全部标为已读」。
+点开菜单栏项就能看到会话。每行前面是 agent 的图标。需要关注的会话（等你确认、工作中、完成未读）总是列出；已读的只在总行数不到 5 行时补上，安静超过 30 分钟的放进「更早的 N 个会话」。点一行打开那个会话（在 Claude 或 Codex 应用里，或它所在的应用）并标为已读，或者用「全部标为已读」。
 
 ## AI 额度
 
 在「设置 › 显示」里勾选「AI 额度」，接入 Claude Code 或 Codex 后才会出现。只有订阅账号才有额度（例如 Claude Pro / Max，或带 Codex 的 ChatGPT 套餐）。菜单栏这一格显示用得最多的那个窗口，菜单里列出每个窗口和它的重置时间。所有窗口都过了重置时间后显示「—」，等下一次使用。
 
-- **Codex**：每次 Codex 的 hook 运行时，从 Codex 自己的会话日志里读，所以需要先批准 hook（见[接入 agent](#接入-agent)）。
+- **Codex**：每轮结束时，从 Codex 自己的会话日志里读，所以需要先批准 hook（见[接入 agent](#接入-agent)）。
 - **Claude Code**：每 5 分钟从 Claude Code 的 `/usage` 命令所用的同一个服务读取。MacSignal 和 Claude Code 一样，用 `security` 命令从钥匙串的「Claude Code-credentials」读取登录信息，不会弹出钥匙串对话框；接入 Claude Code 并勾选「AI 额度」即表示允许。登录信息只发给 Anthropic 的用量服务，不写进日志，也不会被改动。
   - 只用 Claude 桌面端时，这份登录几小时后会过期。这时 MacSignal 让 Claude Code 自己续上：先运行 `claude mcp list`（不消耗额度），不行再发一个极小的请求给最小的模型（约 650 token，最多每 8 小时一次）。两者都带上系统设置里的代理。
-  - MacSignal 还会在 `~/.claude/settings.json` 里加一条不输出任何内容的 `statusLine` 命令，让你在终端里使用时额度随之更新。你已经有自己的状态栏时不改动，设置里会显示「Claude Code 已有自定义状态栏，未统计」。
+  - MacSignal 还会在 `~/.claude/settings.json` 里加一条不输出任何内容的 `statusLine` 命令，让你在终端里使用时额度随之更新。你已经有自己的状态栏时，MacSignal 会保留它，并继续每 5 分钟读取额度。
 
 ## 设置
 

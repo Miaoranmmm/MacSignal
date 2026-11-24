@@ -265,6 +265,22 @@ final class ModulesTests: XCTestCase {
         XCTAssertEqual(q.captured, 1_800_000_001.5, accuracy: 0.001)
     }
 
+    func testCodexHooksReadQuotaOnlyWhenTheTurnFinishes() {
+        let expected = quota("codex", 26)
+        var reads: [String] = []
+        func read(_ transcript: String) -> AgentQuota? {
+            reads.append(transcript)
+            return expected
+        }
+        let transcript = "/tmp/rollout.jsonl"
+        for state in ["working", "waiting", "notify", "end"] {
+            XCTAssertNil(codexHookQuota(state: state, transcript: transcript, read: read))
+        }
+        XCTAssertTrue(reads.isEmpty)
+        XCTAssertEqual(codexHookQuota(state: "done", transcript: transcript, read: read), expected)
+        XCTAssertEqual(reads, [transcript])
+    }
+
     func testLastLineFindsLinesAcrossChunkBoundaries() throws {
         let path = NSTemporaryDirectory() + "lines-\(UUID().uuidString).txt"
         defer { try? FileManager.default.removeItem(atPath: path) }

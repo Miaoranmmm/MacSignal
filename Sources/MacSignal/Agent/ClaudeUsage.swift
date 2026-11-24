@@ -80,18 +80,30 @@ final class ClaudeUsage {
     /// Has Claude Code renew its expired login. Claude Code renews it before anything that needs it:
     /// first `claude mcp list`, which fetches the claude.ai connectors and uses no quota; when that did
     /// not renew it (no connectors, or Claude Code changed), a one-dot request to the smallest model,
-    /// about 650 tokens, without the user's settings, hooks or a saved session. Returns whether the
-    /// login was renewed.
+    /// about 650 tokens at most once every eight hours, without the user's settings, hooks or a saved session.
     private static func renewLogin() -> Bool {
         guard let path = claudeCommands.map({ NSString(string: $0).expandingTildeInPath })
             .first(where: FileManager.default.isExecutableFile(atPath:)) else { return false }
         let environment = proxyEnvironment(system: CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any] ?? [:],
                                            inherited: ProcessInfo.processInfo.environment)
+        return renewLogin(run: { _ = run(path, $0, environment: environment) }, readLogin: readLogin)
+    }
+
+    static func renewLogin(defaults: UserDefaults = .standard, now: () -> Date = Date.init,
+                           run: ([String]) -> Void, readLogin: () -> Login) -> Bool {
         for arguments in [["mcp", "list"],
                           ["-p", ".", "--model", "haiku", "--tools", "", "--system-prompt", "Reply with one dot.",
                            "--setting-sources", "", "--strict-mcp-config", "--no-session-persistence"]] {
-            _ = run(path, arguments, environment: environment)
-            if readLogin() != .expired {
+            if arguments[0] == "-p" {
+                let key = "claudeLastModelRenewalAttempt"
+                let attempt = now()
+                if let last = defaults.object(forKey: key) as? Date, attempt.timeIntervalSince(last) < 8 * 3600 {
+                    return false
+                }
+                defaults.set(attempt, forKey: key)
+            }
+            run(arguments)
+            if case .token = readLogin() {
                 agentLog("Claude Code renewed its login after `claude \(arguments[0] == "-p" ? "-p" : arguments.joined(separator: " "))`")
                 return true
             }

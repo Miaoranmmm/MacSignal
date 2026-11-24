@@ -28,6 +28,8 @@ English | [简体中文](README.zh.md)
 - **Lightweight and local.** Native Swift and AppKit, no third-party dependencies, no Dock icon,
   no admin rights, no background service. Nothing leaves your Mac except the Claude Code usage
   requests to Anthropic described [below](#ai-usage).
+- **Desk traffic light** (optional hardware): the same status on a Bluetooth traffic light on
+  your desk; see [below](#desk-traffic-light-optional).
 - **English and Simplified Chinese**, following your system languages.
 
 ## Supported agents
@@ -112,10 +114,10 @@ git clone https://github.com/Miaoranmmm/MacSignal.git && cd MacSignal
 General › Login Items**.
 
 <details>
-<summary><b>Signing</b>: keep Accessibility permission across rebuilds</summary>
+<summary><b>Signing</b>: keep Accessibility and Bluetooth permissions across rebuilds</summary>
 
-macOS remembers Accessibility permission by the app's signature. With the default ad hoc
-signature every rebuild looks like a new app and you have to grant it again. Sign with a
+macOS remembers Accessibility and Bluetooth permissions by the app's signature. With the default
+ad hoc signature every rebuild looks like a new app and you have to grant them again. Sign with a
 certificate from your keychain instead, an Apple Development certificate or a self-signed code
 signing certificate. `install.sh` uses one named `MacSignal Local Signing` when your keychain has
 it, or the one you name:
@@ -189,6 +191,23 @@ next use.
     updates while you work in the terminal. If you already have your own status line, MacSignal
     leaves it in place and continues reading usage every 5 minutes.
 
+## Desk traffic light (optional)
+
+If you have a **Mini Traffic Light** (a Bluetooth LE light that advertises as `CursorLight`),
+MacSignal can drive it directly. Open **Settings › Desk Traffic Light** and choose **Connect**; macOS
+asks for Bluetooth permission the first time. Red blinks while a session waits for you, yellow
+blinks while one works, and green stays on when a session finishes, until you open it. The light
+shows one agent's sessions (Light Follows); if another of its sessions is still waiting or working
+when one finishes, green blinks five times and the light goes back to that color.
+
+Without the device you do not need to do anything: the traffic light in the menu bar works on its
+own, and MacSignal never uses Bluetooth until you click Connect. Set `TRAFFICLIGHT_BLE_NAME` to
+match a light with a different name.
+
+Coming from AITrafficLight: quit it (and remove it from Login Items) before installing MacSignal.
+MacSignal moves the hooks AITrafficLight wrote over to itself on launch; choose **Light Follows**
+again.
+
 ## Settings
 
 Everything is in the menu under **Settings** (see [The menu](#the-menu)). All choices are remembered, except **Prevent
@@ -199,6 +218,11 @@ Sleep**, which is off again after MacSignal restarts.
 | **Prevent Sleep** (main menu) | Keeps the Mac from sleeping when idle, on battery or power. The display can still turn off. | Off |
 | **Agents** › Claude Code / Codex / iCode | Adds or removes MacSignal's hooks in that agent ([details](#connecting-agents)). Restart the agent afterwards. | Off |
 | **Agents** › Clear Session List | Empties the session list. Shown while it has sessions. | — |
+| **Desk Traffic Light** › Connect / Reconnect | Connects the [desk traffic light](#desk-traffic-light-optional). The section is shown once an agent is connected. | Not connected |
+| **Desk Traffic Light** › Light Follows | Which agent's sessions the desk light shows, or None. | Claude Code |
+| **Desk Traffic Light** › Test Light | Green, yellow or red on, all on, a chase pattern, or all off, to check the light. | — |
+| **Desk Traffic Light** › Disconnect | Disconnects until you choose Connect again. | — |
+| **Desk Traffic Light** › Use a Different Light | Forgets the remembered light and searches for another one. | — |
 | **Mouse** › Classic Mouse Scrolling | Reverses the scroll direction of a mouse wheel only; the trackpad keeps natural scrolling. | Off |
 | **Mouse** › Side Button Desktop Switching | The mouse's back and forward buttons switch to the desktop on the left and right. | Off |
 | **Display** › Network | Upload and download speed. | On |

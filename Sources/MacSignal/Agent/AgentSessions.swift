@@ -2,10 +2,12 @@
 import Foundation
 
 /// Claude Code / Codex / iCode sessions reported by `MacSignal hook` as "J:{json}".
+/// The desk light shows the most urgent state of the followed agent; the menu bar shows all agents.
 final class AgentSessions {
     enum State: String {
         case waiting, working, done
 
+        var mode: Int { [.waiting: 7, .working: 6, .done: 1][self]! }  // red blink, yellow blink, green
         var label: String {
             [.waiting: L("Waiting for you", "等待你确认"), .working: L("Working", "工作中"), .done: L("Done", "已完成")][self]!
         }
@@ -96,6 +98,14 @@ final class AgentSessions {
             agentLog("dropping \(e.agent) session \(e.project): agent pid \(e.pid) exited")
             return false
         }
+    }
+
+    /// Light mode for one agent's sessions: unread waiting > working > unread done > off.
+    func mode(for agent: String) -> Int {
+        for state in [State.waiting, .working, .done] where entries.values.contains(where: { $0.agent == agent && $0.state == state && $0.counts }) {
+            return state.mode
+        }
+        return 0
     }
 
     /// Menu bar count per state across all agents (unread only, except working).

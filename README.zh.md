@@ -20,6 +20,7 @@
 - **额度用完前就看得到。** Claude Code 和 Codex 的用量就在 CPU、内存旁边，重置时间点开就有。
 - **小巧的系统监视器。** 网速、CPU、内存、功耗挤在一个紧凑的菜单栏项里，跟随浅色 / 深色菜单栏。悬停看详情，点开看占用最高的进程。
 - **轻量、本地。** Swift + AppKit 原生编写，没有第三方依赖、程序坞图标和后台服务，不需要管理员权限。除了[下文](#ai-额度)说明的 Claude Code 用量请求，没有任何数据离开你的 Mac。
+- **桌面红绿灯**（可选硬件）：把同样的状态同步到桌上的蓝牙红绿灯，见[下文](#桌面红绿灯可选)。
 - **中英文界面**，跟随系统语言。
 
 ## 支持的 agent
@@ -92,9 +93,9 @@ git clone https://github.com/Miaoranmmm/MacSignal.git && cd MacSignal
 `install.sh` 会构建 app、退出正在运行的 MacSignal、安装到 `/Applications/MacSignal.app` 并启动。要开机启动，在「系统设置 › 通用 › 登录项」里添加。
 
 <details>
-<summary><b>签名</b>：重新构建后保留辅助功能权限</summary>
+<summary><b>签名</b>：重新构建后保留辅助功能和蓝牙权限</summary>
 
-macOS 按 app 的签名记住辅助功能权限。默认的临时签名（ad hoc）下，每次重新构建都像一个新 app，需要重新授权。改用钥匙串里的证书签名即可：Apple Development 证书，或者自签名的代码签名证书。钥匙串里有名为 `MacSignal Local Signing` 的证书时 `install.sh` 会自动使用，也可以指定：
+macOS 按 app 的签名记住辅助功能和蓝牙权限。默认的临时签名（ad hoc）下，每次重新构建都像一个新 app，需要重新授权。改用钥匙串里的证书签名即可：Apple Development 证书，或者自签名的代码签名证书。钥匙串里有名为 `MacSignal Local Signing` 的证书时 `install.sh` 会自动使用，也可以指定：
 
 ```sh
 MACSIGNAL_SIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/install.sh
@@ -135,6 +136,14 @@ MacSignal 修改这些文件来添加 hook：
   - 只用 Claude 桌面端时，这份登录几小时后会过期。这时 MacSignal 让 Claude Code 自己续上：先运行 `claude mcp list`（不消耗额度），不行再发一个极小的请求给最小的模型（约 650 token，最多每 8 小时一次）。两者都带上系统设置里的代理。
   - MacSignal 还会在 `~/.claude/settings.json` 里加一条不输出任何内容的 `statusLine` 命令，让你在终端里使用时额度随之更新。你已经有自己的状态栏时，MacSignal 会保留它，并继续每 5 分钟读取额度。
 
+## 桌面红绿灯（可选）
+
+如果你有 **Mini Traffic Light**（广播名为 `CursorLight` 的蓝牙低功耗红绿灯），MacSignal 可以直接驱动它。打开「设置 › 桌面红绿灯」，点「连接」；第一次连接时 macOS 会询问蓝牙权限。等你确认时红灯闪，工作中黄灯闪，会话完成后绿灯常亮，直到你打开那个会话。灯只显示「灯光跟随」选中的那个 agent 的会话：完成时它如果还有别的会话在等你或在工作，绿灯先闪 5 下，再回到那个颜色。
+
+没有这个设备不用做任何事：菜单栏里的红绿灯照常工作，在你点「连接」之前 MacSignal 不会使用蓝牙。灯的广播名不同时，设置环境变量 `TRAFFICLIGHT_BLE_NAME`。
+
+从 AITrafficLight 换过来：先退出它（并从登录项里移除），再装 MacSignal。MacSignal 启动时会把 AITrafficLight 写的 hook 改成指向自己；「灯光跟随」需要重新选一次。
+
 ## 设置
 
 所有设置都在菜单的「设置」里（见[点开菜单](#点开菜单)）。选择都会被记住，只有「防止睡眠」在 MacSignal 重启后恢复为关闭。
@@ -144,6 +153,11 @@ MacSignal 修改这些文件来添加 hook：
 | **防止睡眠**（主菜单） | 阻止系统空闲睡眠，电池和电源下都有效；显示器仍可以关闭。 | 关 |
 | **Agent** › Claude Code / Codex / iCode | 在对应 agent 里添加或移除 MacSignal 的 hook（[详情](#接入-agent)），之后重启 agent。 | 关 |
 | **Agent** › 清空会话列表 | 清空会话列表，列表里有会话时才出现。 | — |
+| **桌面红绿灯** › 连接 / 重新连接 | 连接[桌面红绿灯](#桌面红绿灯可选)。接入 agent 后这一段才出现。 | 未连接 |
+| **桌面红绿灯** › 灯光跟随 | 桌面灯显示哪个 agent 的会话，或不跟随。 | Claude Code |
+| **桌面红绿灯** › 测试灯光 | 绿灯、黄灯、红灯长亮，三灯长亮，跑马灯或关灯，用来检查灯。 | — |
+| **桌面红绿灯** › 断开连接 | 断开，直到你再点「连接」。 | — |
+| **桌面红绿灯** › 换一个红绿灯设备 | 忘掉记住的灯，重新搜索另一个。 | — |
 | **鼠标** › 传统滚动 | 只反转鼠标滚轮的方向，触控板保持自然滚动。 | 关 |
 | **鼠标** › 侧键切换桌面 | 鼠标的后退 / 前进键切换到左边 / 右边的桌面。 | 关 |
 | **显示** › 网速 | 上传和下载速度。 | 开 |

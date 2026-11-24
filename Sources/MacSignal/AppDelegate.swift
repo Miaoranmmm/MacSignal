@@ -23,12 +23,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// 显示数字: percentages instead of bars for CPU, memory and AI quota.
     private var showNumbers = UserDefaults.standard.bool(forKey: "showNumbers")
 
-    // Agents.
+    // Agents and the desk light.
     let receiver = AgentReceiver()
+    private lazy var device = TrafficLightDevice(sessions: receiver.sessions)
     private lazy var agentMenu = AgentMenuContent(receiver: receiver)
     private let quota = UsageLimits()
     private let claudeUsage = ClaudeUsage()
-    /// Agents with our hooks; any: the lamps and 「Agent 会话」 are shown.
+    /// Agents with our hooks; any: the lamps, 「Agent 会话」 and 「红绿灯」 are shown.
     /// Set by refreshAgents (internal so tests can build the menu for either case).
     var hookedAgents: Set<String> {
         get { receiver.hookedAgents }
@@ -36,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     var agentsHooked: Bool { !hookedAgents.isEmpty }
     private var menuOpen = false
+    /// Reads Claude Code's quota every few minutes; stopped on quit.
+    private var usageTimer: Timer?
     /// Waiting sessions already announced; a new one blinks the red lamp.
     private var knownWaiting: Set<String> = []
     private var blinkTimer: Timer?
@@ -48,7 +51,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Also applies when launching the SwiftPM executable without a bundle.
         NSApp.setActivationPolicy(.accessory)
         status = StatusController(target: self, action: #selector(showMenu(_:))) { [weak self] in self?.updateStatus() }
-        receiver.onSessionsChange = { [weak self] in self?.sessionsChanged() }
+        device.onStatusChange = { [weak self] in
+            self?.syncMenu()
+            self?.updateStatus()
+        }
+        receiver.onSessionsChange = { [weak self] in
+            self?.device.sessionsChanged()
+            self?.sessionsChanged()
+        }
+        receiver.onSessionFinished = { [weak self] id in self?.device.sessionFinished(id) }
         receiver.onQuota = { [weak self] json in
             if self?.quota.apply(json) == true { self?.updateStatus() }
         }
@@ -67,8 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   name: NSWorkspace.didWakeNotification, object: nil)
         startSampling(rebaseline: true)
         refreshClaudeUsage()
-        let usageTimer = Timer(timeInterval: ClaudeUsage.interval, repeats: true) { [weak self] _ in self?.refreshClaudeUsage() }
-        RunLoop.main.add(usageTimer, forMode: .common)
+        let timer = Timer(timeInterval: ClaudeUsage.interval, repeats: true) { [weak self] _ in self?.refreshClaudeUsage() }
+        RunLoop.main.add(timer, forMode: .common)
+        usageTimer = timer
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -77,8 +89,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stopMouseTapRetry()
         mouseTap.stop()
         sleepPrevention.setActive(false)
+        usageTimer?.invalidate()
         stopSampling()
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        // Last, with nothing else scheduled: turn the desk light off instead of leaving the last
+        // state lit, and give the command a moment to go out before the app exits.
+        if agentsHooked, device.connectedName != nil {
+            device.setActive(false)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.4))
+        }
     }
 
     // Double-clicking the app while it runs only sends a reopen event: show the menu.
@@ -121,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Brings the open menu up to date after a choice in it or a change behind it
-    /// (sessions arriving).
+    /// (the light connecting, sessions arriving).
     private func syncMenu() {
         guard menuOpen else { return }
         sleepItem?.state = sleepPrevention.isActive ? .on : .off
@@ -135,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async(execute: work)
     }
 
-    /// 设置 ›: Agent, 鼠标, 显示.
+    /// 设置 ›: Agent, 红绿灯 (only with an agent hooked up), 鼠标, 显示.
     func settingsMenu() -> NSMenu {
         let settings = MenuStyle.menu()
         settings.addItem(ProcessMenuContent.heading(L("Agents", "Agent")))
@@ -159,6 +178,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settings.addItem(keepOpen(clear))
         }
         settings.addItem(.separator())
+
+        if agentsHooked {
+            settings.addItem(ProcessMenuContent.heading(TrafficLightDevice.title))
+            lightItems().forEach(settings.addItem)
+            settings.addItem(.separator())
+        }
 
         settings.addItem(ProcessMenuContent.heading(L("Mouse", "鼠标")))
         for item in Self.mouseOptionItems(enabled: mouseOptions, pending: pendingMouseTapReason(), target: self) {
@@ -205,6 +230,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return settings
     }
 
+    /// 「Connected to …」, 「Disconnected」 (by the user) or 「Not connected」.
+    private var lightConnection: String {
+        device.connectedName.map { L("Connected to \($0)", "已连接 \($0)") }
+            // 已断开 only after 断开连接 from a remembered light; never connected is 未连接.
+            ?? (device.paused && device.savedDevice != nil ? L("Disconnected", "已断开") : L("Not connected", "未连接"))
+    }
+
+    /// 设置 › 桌面红绿灯. Without a light there is nothing to test or follow; 换一个 only matters
+    /// once a light is remembered.
+    private func lightItems() -> [NSMenuItem] {
+        let name = device.connectedName
+        let status = NSMenuItem(title: name != nil ? lightConnection
+                                    : lightConnection + L(" · status in menu bar only", " · 状态只显示在菜单栏"),
+                                action: nil, keyEquivalent: "")
+        status.isEnabled = false
+        // A monochrome symbol, not a colored dot: those mean session states in this menu.
+        status.image = Self.antenna[name != nil]
+        let follow = NSMenuItem(title: L("Light Follows", "灯光跟随"), action: nil, keyEquivalent: "")
+        follow.submenu = MenuStyle.menu()
+        for (agent, title) in agentNames + [("none", L("None", "不跟随"))] {
+            let item = NSMenuItem(title: title, action: #selector(setFollow(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = agent
+            item.state = agent == device.follow ? .on : .off
+            follow.submenu?.addItem(keepOpen(item))
+        }
+        let test = NSMenuItem(title: L("Test Light", "测试灯光"), action: nil, keyEquivalent: "")
+        test.submenu = MenuStyle.menu()
+        for (title, mode) in [(L("Green On", "绿灯长亮"), 1), (L("Yellow On", "黄灯长亮"), 2), (L("Red On", "红灯长亮"), 3),
+                              (L("All On", "三灯长亮"), 4), (L("Chase", "跑马灯"), 9), (L("All Off", "关灯"), 0)] {
+            let item = NSMenuItem(title: title, action: #selector(testLight(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = mode
+            test.submenu?.addItem(keepOpen(item))
+        }
+        let reconnect = NSMenuItem(title: device.paused ? L("Connect", "连接") : L("Reconnect", "重新连接"), action: #selector(reconnectLight),
+                                   keyEquivalent: "r")
+        let disconnect = NSMenuItem(title: L("Disconnect", "断开连接"), action: #selector(disconnectLight), keyEquivalent: "")
+        let forget = NSMenuItem(title: L("Use a Different Light", "换一个红绿灯设备"), action: #selector(forgetLight), keyEquivalent: "")
+        for item in [reconnect, disconnect, forget] {
+            item.target = self
+            keepOpen(item)
+        }
+        follow.isHidden = name == nil
+        test.isHidden = name == nil
+        disconnect.isHidden = name == nil
+        forget.isHidden = name == nil && device.savedDevice == nil
+        return [status, follow, test, reconnect, disconnect, forget]
+    }
+
+    private static let antenna: [Bool: NSImage] = [
+        true: NSImage(systemSymbolName: "antenna.radiowaves.left.and.right", accessibilityDescription: nil)!,
+        false: NSImage(systemSymbolName: "antenna.radiowaves.left.and.right.slash", accessibilityDescription: nil)!,
+    ]
+
     @objc private func showMenu(_ sender: NSStatusBarButton) {
         status?.tooltip?.suspend()
         // The hooks may have been changed outside MacSignal.
@@ -250,17 +330,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Shows or hides everything agent-related, and starts or stops the socket with it.
+    /// Shows or hides everything agent-related, and starts or stops the socket and the light with it.
     func refreshAgents() {
         let agents = Set(Integration.all.filter(\.installed).map(\.id))
         refreshStatusLine(claudeHooked: agents.contains("claude"))
         guard agents != hookedAgents else { return }
         let wasHooked = agentsHooked
         hookedAgents = agents
-        if agentsHooked != wasHooked {
-            receiver.setActive(agentsHooked)
+        // Also refreshes the desk light (receiver.onSessionsChange).
+        guard agentsHooked != wasHooked else { return receiver.applySessions() }
+        // The light starts after the socket and stops before it forgets the sessions.
+        if agentsHooked {
+            receiver.setActive(true)
+            device.setActive(true)
         } else {
-            sessionsChanged()
+            device.setActive(false)
+            receiver.setActive(false)
         }
     }
 
@@ -335,6 +420,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         receiver.applySessions()
     }
 
+    @objc private func setFollow(_ sender: NSMenuItem) {
+        guard let agent = sender.representedObject as? String else { return }
+        device.follow = agent
+    }
+
+    @objc private func testLight(_ sender: NSMenuItem) { device.setMode(sender.tag) }
+    @objc private func reconnectLight() { device.reconnect() }
+    @objc private func forgetLight() { device.reconnect(forget: true) }
+    @objc private func disconnectLight() { device.disconnect() }
     @objc private func openLog() { NSWorkspace.shared.open(URL(fileURLWithPath: agentLogPath)) }
 
     // MARK: Menu bar item
@@ -390,6 +484,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let counts = receiver.sessions.counts
             lines.append(L("Agents: \(counts[0]) waiting for you · \(counts[1]) working · \(counts[2]) done, unread",
                            "Agent：等待你确认 \(counts[0]) · 工作中 \(counts[1]) · 完成未读 \(counts[2])"))
+            lines.append(TrafficLightDevice.title + L(": ", "：") + lightConnection)
         }
         lines.append(L("Click or right-click to open the menu", "点按或右键点按打开菜单"))
         status.update(cells: StatusModule.cells(r), preventingSleep: active, showNumbers: showNumbers,

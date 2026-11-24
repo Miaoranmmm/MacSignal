@@ -94,6 +94,10 @@ final class AgentTests: XCTestCase {
         for command in [
             "[ -x \"/Users/me/Downloads/MacSignal/build/MacSignal.app/Contents/MacOS/MacSignal\" ] || exit 0; \"/Users/me/Downloads/MacSignal/build/MacSignal.app/Contents/MacOS/MacSignal\" hook working codex",
             "\"/Applications/MacSignal.app/Contents/MacOS/MacSignal\" hook done",
+            // The apps MacSignal replaces.
+            "[ -x \"/Applications/MacStats.app/Contents/MacOS/MacStats\" ] || exit 0; \"/Applications/MacStats.app/Contents/MacOS/MacStats\" hook working",
+            "[ -x \"/Applications/AITrafficLight.app/Contents/MacOS/AITrafficLight\" ] || exit 0; \"/Applications/AITrafficLight.app/Contents/MacOS/AITrafficLight\" hook working",
+            "python3 /Users/me/MiniTrafficLight/trafficlight.py hook waiting",
         ] {
             XCTAssertTrue(Integration.isOurs(command), command)
         }
@@ -258,6 +262,44 @@ final class AgentTests: XCTestCase {
         }
     }
 
+    /// The block MacStats (and AITrafficLight) wrote is replaced by ours, with the user's hooks kept.
+    func testICodeHooksFromMacStatsAreReplaced() throws {
+        let home = try temporaryHome()
+        let icode = Integration.all.first { $0.id == "icode" }!
+        try FileManager.default.createDirectory(atPath: home + "/.chrys/hooks", withIntermediateDirectories: true)
+        let old = "/Applications/MacStats.app/Contents/MacOS/MacStats"
+        try """
+        hooks:
+        # >>> AITrafficLight hooks (managed by AITrafficLight.app)
+          - id: "traffic-light-turn"
+            event: "before_turn"
+            run:
+              type: "command"
+              argv: ["\(old)", "hook", "working", "icode"]
+        # <<< AITrafficLight hooks
+          - id: "mine"
+            event: "after_turn"
+            run:
+              type: "command"
+              argv: ["say", "done"]
+
+        """.write(toFile: icode.hooksFile, atomically: true, encoding: .utf8)
+        XCTAssertTrue(icode.installed)
+        XCTAssertFalse(icode.current)
+        try icode.install()
+        XCTAssertFalse(try icode.text.contains("AITrafficLight"))
+        XCTAssertFalse(try icode.text.contains(old))
+        XCTAssertTrue(try icode.text.contains("# >>> MacSignal hooks (managed by MacSignal)"))
+        XCTAssertTrue(try icode.text.contains("id: \"mine\""))
+        XCTAssertTrue(icode.current)
+    }
+
+    func testClaudeStatusLineFromMacStatsIsOurs() {
+        XCTAssertTrue(Integration.isOurStatusLine(
+            "[ -x \"/Applications/MacStats.app/Contents/MacOS/MacStats\" ] || exit 0; \"/Applications/MacStats.app/Contents/MacOS/MacStats\" statusline"))
+        XCTAssertFalse(Integration.isOurStatusLine("~/bin/my-statusline.sh"))
+    }
+
     // MARK: Menu
 
     func testSessionSectionRowsAndOlderSubmenu() {
@@ -400,7 +442,7 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(content.items(now: later).first { $0.submenu != nil }?.title, "更早的 1 个会话")
     }
 
-    func testSettingsShowLogOnlyWithAnAgentHookedUp() {
+    func testSettingsShowLightSectionOnlyWithAnAgentHookedUp() {
         let delegate = AppDelegate()
         func headings(_ menu: NSMenu) -> [String] {
             menu.items.filter { ($0.view?.frame.height ?? 0) > 0 && !($0.view is MenuActionRow) }.map(\.title)
@@ -413,9 +455,14 @@ final class AgentTests: XCTestCase {
         XCTAssertFalse(menu.items.contains { $0.title.contains("紧凑") })
         delegate.hookedAgents = ["claude"]
         menu = delegate.settingsMenu()
-        XCTAssertEqual(headings(menu), ["Agent", "鼠标", "显示"])
+        XCTAssertEqual(headings(menu), ["Agent", "桌面红绿灯", "鼠标", "显示"])
         XCTAssertTrue(menu.items.contains { $0.title == "显示数字" })
         XCTAssertTrue(menu.items.contains { $0.title == "打开日志" })
+        // Never connected: 连接, and nothing to follow, test or disconnect yet.
+        let visible = menu.items.filter { !$0.isHidden }.map(\.title)
+        XCTAssertTrue(visible.contains("连接"))
+        XCTAssertFalse(visible.contains("灯光跟随"))
+        XCTAssertFalse(visible.contains("断开连接"))
     }
 
     func testDisconnectingOneAgentClearsItsSessionsAndIgnoresLaterReports() throws {
@@ -466,19 +513,46 @@ final class AgentTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: settings), original)
     }
 
-    /// A report on the socket reaches the sessions; one it does not know is ignored.
+    /// A report on the socket reaches the sessions and a finish goes to the light; a report from an
+    /// agent that isn't hooked up, or any other message, is ignored.
     func testReceiverAppliesSessionReportsAndQuotas() {
         let receiver = AgentReceiver()
         receiver.hookedAgents = ["claude"]
-        var changes = 0, quotas: [String] = []
+        var changes = 0, quotas: [String] = [], finished: [String] = []
         receiver.onSessionsChange = { changes += 1 }
         receiver.onQuota = { quotas.append($0) }
+        receiver.onSessionFinished = { finished.append($0) }
         receiver.handle(#"J:{"state":"working","session":"s1","agent":"claude","project":"p"}"#)
         XCTAssertEqual(receiver.sessions.counts, [0, 1, 0])
         XCTAssertEqual(changes, 1)
+        receiver.handle(#"J:{"state":"done","session":"s1","agent":"claude"}"#)
+        XCTAssertEqual(finished, ["s1"])
         receiver.handle(#"Q:{"agent":"codex"}"#)
         XCTAssertEqual(quotas, [#"{"agent":"codex"}"#])
+        // A repeated finish is not a new one.
+        receiver.handle(#"J:{"state":"done","session":"s1","agent":"claude"}"#)
+        XCTAssertEqual(finished, ["s1"])
+        receiver.handle(#"J:{"state":"done","session":"s2","agent":"codex"}"#)
         receiver.handle("I:3")
-        XCTAssertEqual(changes, 1)
+        XCTAssertEqual(finished, ["s1"])
+        XCTAssertEqual(changes, 3)
+    }
+
+    /// §3.1: without a remembered light a restart counts as 已断开; a remembered one reconnects.
+    func testRestartWithoutRememberedLightStaysDisconnected() {
+        let defaults = UserDefaults.standard
+        let saved = (defaults.object(forKey: "deviceID"), defaults.object(forKey: "devicePaused"))
+        defer {
+            defaults.set(saved.0, forKey: "deviceID")
+            defaults.set(saved.1, forKey: "devicePaused")
+        }
+        // 连接 was chosen, but no light was found before quitting.
+        defaults.removeObject(forKey: "deviceID")
+        defaults.set(false, forKey: "devicePaused")
+        XCTAssertTrue(TrafficLightDevice(sessions: AgentSessions()).paused)
+
+        defaults.set("0F0F-LIGHT", forKey: "deviceID")
+        defaults.set(false, forKey: "devicePaused")
+        XCTAssertFalse(TrafficLightDevice(sessions: AgentSessions()).paused)
     }
 }

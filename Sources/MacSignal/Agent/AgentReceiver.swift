@@ -35,6 +35,8 @@ final class AgentReceiver {
     var onSessionsChange: (() -> Void)?
     /// A "Q:" message's JSON (see AgentQuota).
     var onQuota: ((String) -> Void)?
+    /// A session just finished (after onSessionsChange).
+    var onSessionFinished: ((String) -> Void)?
     /// At least one agent is hooked up: listen for reports.
     private(set) var active = false
     private var socketSource: DispatchSourceRead?
@@ -94,8 +96,13 @@ final class AgentReceiver {
     func handle(_ cmd: String) {
         if cmd.hasPrefix("Q:") {
             onQuota?(String(cmd.dropFirst(2)))
-        } else if sessions.apply(cmd, hookedAgents: hookedAgents) {
+        } else if cmd.hasPrefix("J:") {
+            let doneBefore = Set(sessions.entries.filter { $0.value.state == .done }.keys)
+            guard sessions.apply(cmd, hookedAgents: hookedAgents) else { return }
             applySessions()
+            for (id, e) in sessions.entries where e.state == .done && !doneBefore.contains(id) {
+                onSessionFinished?(id)
+            }
         }
     }
 

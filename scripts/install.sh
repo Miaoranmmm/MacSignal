@@ -4,7 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# A fixed certificate keeps Accessibility access across rebuilds: MACSIGNAL_SIGN_IDENTITY, else
+# A fixed certificate keeps Accessibility and Bluetooth access across rebuilds: MACSIGNAL_SIGN_IDENTITY, else
 # "MacSignal Local Signing" when the keychain has it, else ad hoc.
 if [ -z "${MACSIGNAL_SIGN_IDENTITY:-}" ] && security find-certificate -c "MacSignal Local Signing" >/dev/null 2>&1; then
     export MACSIGNAL_SIGN_IDENTITY="MacSignal Local Signing"

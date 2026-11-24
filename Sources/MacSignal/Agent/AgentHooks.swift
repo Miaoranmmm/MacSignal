@@ -158,9 +158,11 @@ struct Integration {
             || apps[id].flatMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) } != nil
     }
 
-    /// A hook command is ours: MacSignal at any path (the app may have moved).
+    /// A hook command is ours: MacSignal at any path (the app may have moved), or the apps it
+    /// replaces (MacStats, AITrafficLight, 红绿灯.app's TrafficLightBLE, trafficlight.py).
     static func isOurs(_ command: String) -> Bool {
-        command.contains("MacSignal\" hook") || command.contains("\"\(binary)\" hook")
+        ["MacSignal\" hook", "MacStats\" hook", "AITrafficLight\" hook", "TrafficLightBLE\" hook", "TrafficLightBLE hook",
+         "trafficlight.py hook"].contains { command.contains($0) } || command.contains("\"\(binary)\" hook")
     }
 
     /// Exits quietly when the app is gone (deleted without turning the agent off first), so the agent
@@ -186,7 +188,12 @@ struct Integration {
             .compactMap { $0["command"] as? String }.filter(Integration.isOurs)
     }
 
-    var installed: Bool { id == "icode" ? (try? text.contains("macsignal-")) == true : !ourCommands.isEmpty }
+    var installed: Bool {
+        // iCode: also the hooks MacStats and AITrafficLight wrote, so they are rewritten.
+        guard id == "icode" else { return !ourCommands.isEmpty }
+        let text = (try? self.text) ?? ""
+        return text.contains("macsignal-") || text.contains("traffic-light-")
+    }
 
     /// Installed, and every hook runs this copy of the app (false after the app moved or an update).
     var current: Bool {
@@ -299,9 +306,10 @@ struct Integration {
         case none, ours(current: Bool), theirs
     }
 
-    /// MacSignal at any path (the app may have moved), like `isOurs`.
+    /// MacSignal at any path (the app may have moved), or MacStats before it, like `isOurs`.
     static func isOurStatusLine(_ command: String) -> Bool {
-        command.contains("MacSignal\" statusline") || command.contains("\"\(binary)\" statusline")
+        command.contains("MacSignal\" statusline") || command.contains("MacStats\" statusline")
+            || command.contains("\"\(binary)\" statusline")
     }
 
     static var statusLineCommand: String { guardPrefix + "\"\(binary)\" statusline" }
@@ -363,12 +371,16 @@ struct Integration {
     /// The marker lines around our entries, so scripts that rewrite hooks.yaml can keep them.
     static let yamlBegin = "# >>> MacSignal hooks (managed by MacSignal)"
     static let yamlEnd = "# <<< MacSignal hooks"
+    /// The markers MacStats and AITrafficLight wrote, replaced on the next install.
+    static let oldYAMLMarkers = ("# >>> AITrafficLight hooks (managed by AITrafficLight.app)", "# <<< AITrafficLight hooks")
 
     /// iCode hooks.yaml: our entries sit between marker comments right under `hooks:`.
     private func writeYAML(add: Bool) throws {
         var lines = try text.components(separatedBy: "\n")
-        if let b = lines.firstIndex(of: Integration.yamlBegin), let e = lines[b...].firstIndex(of: Integration.yamlEnd) {
-            lines.removeSubrange(b...e)
+        for (begin, end) in [(Integration.yamlBegin, Integration.yamlEnd), Integration.oldYAMLMarkers] {
+            if let b = lines.firstIndex(of: begin), let e = lines[b...].firstIndex(of: end) {
+                lines.removeSubrange(b...e)
+            }
         }
         func isContent(_ line: String) -> Bool {
             let trimmed = line.trimmingCharacters(in: .whitespaces)

@@ -15,7 +15,7 @@ app_path="$PWD/build/MacSignal.app"
 mkdir -p "$app_path/Contents/MacOS" "$app_path/Contents/Resources"
 cp "$bin_dir/MacSignal" "$app_path/Contents/MacOS/MacSignal"
 cp Resources/Info.plist "$app_path/Contents/Info.plist"
-# English and Chinese: the .lproj folders list MacSignal under per-app languages in System Settings.
+# English and Chinese: the system picks one (InfoPlist.strings holds the Bluetooth prompt).
 cp -R Resources/*.lproj "$app_path/Contents/Resources/"
 
 # Use full-bleed square artwork; macOS supplies the outer shape and material.

@@ -91,6 +91,13 @@ stay awake. With every module turned off, the menu bar shows the app icon instea
   </tr>
 </table>
 
+## The menu
+
+Click the menu bar item for the details: the agent sessions, the top processes by CPU and
+memory, power, AI usage with reset times, and the settings. The picture uses example data.
+
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/menu-en-dark.png"><img alt="The MacSignal menu with the Settings submenu open" src="docs/menu-en-light.png" width="610"></picture></p>
+
 ## Install
 
 You need Xcode or the Command Line Tools (Swift 5.9 or later).
@@ -180,7 +187,7 @@ next use.
 
 ## Settings
 
-Everything is in the menu under **Settings**. All choices are remembered, except **Prevent
+Everything is in the menu under **Settings** (see [The menu](#the-menu)). All choices are remembered, except **Prevent
 Sleep**, which is off again after MacSignal restarts.
 
 | Setting | What it does | Default |

@@ -74,6 +74,12 @@ MacSignal 通过各个 agent 自己的 hook 接入：不套壳，不改 agent �
   </tr>
 </table>
 
+## 点开菜单
+
+点一下菜单栏项就能看到详情：agent 会话、CPU 和内存占用最高的进程、功耗、AI 额度和重置时间，以及设置。图中是示例数据。
+
+<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="docs/menu-zh-dark.png"><img alt="MacSignal 菜单，展开了「设置」子菜单" src="docs/menu-zh-light.png" width="560"></picture></p>
+
 ## 安装
 
 需要 Xcode 或 Command Line Tools（Swift 5.9 及以上）。
@@ -131,7 +137,7 @@ MacSignal 修改这些文件来添加 hook：
 
 ## 设置
 
-所有设置都在菜单的「设置」里。选择都会被记住，只有「防止睡眠」在 MacSignal 重启后恢复为关闭。
+所有设置都在菜单的「设置」里（见[点开菜单](#点开菜单)）。选择都会被记住，只有「防止睡眠」在 MacSignal 重启后恢复为关闭。
 
 | 设置 | 作用 | 默认 |
 | --- | --- | --- |
